@@ -1,0 +1,8 @@
+node_modules/
+
+# Phone lists stay on this machine.
+/*.txt
+/package-lock.json
+app/sample-project/num_out/
+
+.DS_Store
