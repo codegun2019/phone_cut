@@ -336,8 +336,13 @@ app.use((req, res, next) => {
 });
 
 app.get("/api/health", (_req, res) => {
+  if (process.env.VERCEL) {
+    res.json({ ok: true, mode: "browser" });
+    return;
+  }
   res.json({
     ok: true,
+    mode: "local",
     defaultPath: fs.realpathSync(SAMPLE_DIR),
     workspace: fs.realpathSync(WORKSPACE),
   });
@@ -424,6 +429,7 @@ app.get("/name-format.js", (_req, res) => {
   res.sendFile(path.join(APP_DIR, "lib", "names.js"));
 });
 
+app.use("/lib", express.static(path.join(APP_DIR, "lib"), { etag: false, maxAge: 0 }));
 app.use(express.static(PUBLIC_DIR, { index: "index.html", etag: false, maxAge: 0 }));
 
 export function start(port = 0) {
@@ -435,9 +441,10 @@ export function start(port = 0) {
 }
 
 export { app };
+export default app;
 
 const entry = process.argv[1] ? pathToFileURL(path.resolve(process.argv[1])).href : "";
-if (entry === import.meta.url) {
+if (!process.env.VERCEL && entry === import.meta.url) {
   const port = Number(process.env.PORT) || 4173;
   start(port)
     .then((server) => {

@@ -1,0 +1,5 @@
+{
+  "framework": null,
+  "buildCommand": "node app/scripts/build-static.mjs",
+  "outputDirectory": "app/dist"
+}

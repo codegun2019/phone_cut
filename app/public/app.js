@@ -1,11 +1,17 @@
-import { makeFilename, safeDirName, safePrefix, timestampFolder } from "/name-format.js";
+import { makeFilename, safeDirName, safePrefix, timestampFolder } from "/lib/names.js";
+import { splitPhoneTexts } from "/lib/split-text.js";
+import { zipStore } from "/zip.js";
 
 const state = {
   browse: null,
+  browser: false,
+  dirHandle: null,
+  filesByPath: new Map(),
   projectPath: "",
   outputPath: "",
   running: false,
 };
+const blobUrls = [];
 
 const $ = (id) => document.getElementById(id);
 
@@ -99,14 +105,27 @@ function syncSelection() {
 }
 
 function currentOutputDir() {
+  if (state.browser) {
+    if (!state.projectPath) return "";
+    return `${state.projectPath}/${safeDirName($("output-name").value)}`;
+  }
   if (state.outputPath) return state.outputPath;
   if (!state.projectPath) return "";
   return joinPath(state.projectPath, safeDirName($("output-name").value));
 }
 
 function updateOutputLabel() {
-  const target = currentOutputDir();
   const stamp = timestampFolder(new Date());
+  if (state.browser) {
+    const folder = safeDirName($("output-name").value);
+    $("output-path").textContent = state.dirHandle
+      ? `บันทึกในโฟลเดอร์ที่เลือก/${folder}/${stamp}/ เวลาจริงคือตอนกดบันทึก`
+      : `ดาวน์โหลดเป็น zip โฟลเดอร์ ${folder}/${stamp}/ เวลาจริงคือตอนกดบันทึก`;
+    $("output-warning").classList.add("hidden");
+    $("output-name-wrap").classList.remove("hidden");
+    return;
+  }
+  const target = currentOutputDir();
   $("output-path").textContent = target
     ? `บันทึกที่ ${target}/${stamp}/ เวลาจริงคือตอนกดบันทึก`
     : "เลือกโปรเจกต์ก่อน แล้วระบบจะสร้างโฟลเดอร์ num_out ตามวัน-เดือน-ปี_เวลา";
@@ -293,7 +312,13 @@ function statCard(label, value, tone) {
   return card;
 }
 
+function revokeBlobs() {
+  for (const url of blobUrls) URL.revokeObjectURL(url);
+  blobUrls.length = 0;
+}
+
 function renderResult(data) {
+  revokeBlobs();
   const result = $("result");
   result.classList.remove("hidden");
   result.replaceChildren();
@@ -303,7 +328,7 @@ function renderResult(data) {
     el(
       "p",
       "text-xs font-semibold uppercase tracking-[0.16em] text-pine",
-      saved ? "บันทึกแล้ว" : "ตัวอย่าง ยังไม่เขียนไฟล์",
+      saved ? (data.downloadedZip ? "ดาวน์โหลดแล้ว" : "บันทึกแล้ว") : "ตัวอย่าง ยังไม่เขียนไฟล์",
     ),
   );
   const title = data.message
@@ -329,8 +354,13 @@ function renderResult(data) {
 
   if (data.files.length) {
     const heading = el("div", "mt-5 flex items-center justify-between gap-3");
-    heading.append(el("h3", "font-semibold", saved ? "ไฟล์ที่เขียน" : "ไฟล์ที่จะถูกสร้าง"));
-    if (saved) {
+    heading.append(el("h3", "font-semibold", saved ? (data.downloadedZip ? "ไฟล์ในชุดนี้" : "ไฟล์ที่เขียน") : "ไฟล์ที่จะถูกสร้าง"));
+    if (saved && data.browser) {
+      const zip = el("button", "rounded-full bg-ink px-3 py-1.5 text-xs font-medium text-white", "ดาวน์โหลด zip");
+      zip.type = "button";
+      zip.addEventListener("click", () => downloadZip(data));
+      heading.append(zip);
+    } else if (saved) {
       const reveal = el("button", "rounded-full bg-ink px-3 py-1.5 text-xs font-medium text-white", "แสดงใน Finder");
       reveal.type = "button";
       reveal.addEventListener("click", () => revealPath(data.outputDir));
@@ -342,9 +372,15 @@ function renderResult(data) {
       const row = el("div", "flex items-center gap-3 bg-white px-3 py-3");
       row.append(el("span", "min-w-0 flex-1 truncate font-mono text-sm", file.name));
       row.append(el("span", "text-sm tabular-nums text-stone-500", `${formatInt(file.count)} เบอร์`));
-      if (file.token) {
+      if (file.token || file.body) {
         const link = el("a", "text-sm font-medium text-pine underline-offset-2 hover:underline", "ดาวน์โหลด");
-        link.href = `/api/download?token=${encodeURIComponent(file.token)}`;
+        if (file.token) {
+          link.href = `/api/download?token=${encodeURIComponent(file.token)}`;
+        } else {
+          const url = URL.createObjectURL(new Blob([file.body], { type: "text/plain;charset=utf-8" }));
+          blobUrls.push(url);
+          link.href = url;
+        }
         link.download = file.name;
         row.append(link);
       }
@@ -429,8 +465,9 @@ async function run(dryRun) {
   }
   const bytes = selectedBytes();
   if (!dryRun && bytes > 50 * 1024 * 1024) {
+    const action = state.browser && !state.dirHandle ? "ดาวน์โหลดเป็นไฟล์ zip" : "เขียนไฟล์ลงโฟลเดอร์ที่เลือก";
     const ok = window.confirm(
-      `ไฟล์ที่เลือกมีขนาดรวม ${formatBytes(bytes)} งานนี้อาจใช้เวลาสักครู่และจะเขียนไฟล์ลงดิสก์ ดำเนินการต่อหรือไม่`,
+      `ไฟล์ที่เลือกมีขนาดรวม ${formatBytes(bytes)} งานนี้อาจใช้เวลาสักครู่และจะ${action} ดำเนินการต่อหรือไม่`,
     );
     if (!ok) return;
   }
@@ -445,11 +482,13 @@ async function run(dryRun) {
   active.textContent = "กำลังคัดเบอร์...";
 
   try {
-    const data = await api("/api/process", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ ...settings, files, dryRun }),
-    });
+    const data = state.browser
+      ? await processInBrowser(settings, dryRun)
+      : await api("/api/process", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ ...settings, files, dryRun }),
+        });
     renderResult(data);
   } catch (error) {
     showError(error.message);
@@ -488,6 +527,160 @@ async function pickFromFinder(purpose) {
   }
 }
 
+async function readTextFile(file) {
+  const bytes = new Uint8Array(await file.arrayBuffer());
+  if (bytes.length >= 2 && bytes[0] === 0xff && bytes[1] === 0xfe) {
+    return new TextDecoder("utf-16le").decode(bytes);
+  }
+  return new TextDecoder("utf-8").decode(bytes);
+}
+
+function applyBrowserFiles(folderName, files) {
+  state.filesByPath = new Map(files.map((file) => [file.path, file]));
+  state.projectPath = folderName;
+  state.outputPath = "";
+  $("project-title").textContent = folderName;
+  $("project-path").textContent = "โฟลเดอร์ที่เลือกในเบราว์เซอร์";
+  const total = files.reduce((sum, file) => sum + file.size, 0);
+  const large = files.length > 30 || total > 20 * 1024 * 1024;
+  $("size-warning").classList.toggle("hidden", !large);
+  renderFiles(files, !large);
+  clearResult();
+  setStep(files.length ? 2 : 1);
+  $("browse-meta").textContent = `ไฟล์ .txt ${formatInt(files.length)} · ${formatBytes(total)}`;
+  $("dir-list").replaceChildren(el("p", "px-1 py-3 text-sm text-stone-300", folderName));
+  updateOutputLabel();
+}
+
+async function loadDirectoryHandle(dirHandle) {
+  const files = [];
+  for await (const [name, handle] of dirHandle.entries()) {
+    if (handle.kind !== "file" || name.startsWith(".") || !name.toLowerCase().endsWith(".txt")) continue;
+    const file = await handle.getFile();
+    files.push({ name, path: name, size: file.size, file });
+  }
+  files.sort((a, b) => a.name.localeCompare(b.name, "th", { numeric: true }));
+  state.dirHandle = dirHandle;
+  applyBrowserFiles(dirHandle.name, files);
+}
+
+async function pickBrowserFolder() {
+  clearError();
+  if (typeof window.showDirectoryPicker === "function") {
+    try {
+      const handle = await window.showDirectoryPicker({ mode: "readwrite" });
+      await loadDirectoryHandle(handle);
+      return;
+    } catch (error) {
+      if (error?.name === "AbortError") return;
+    }
+  }
+  $("folder-input").click();
+}
+
+function onFolderInput(event) {
+  const list = [...event.target.files];
+  event.target.value = "";
+  const direct = list.filter((file) => {
+    const parts = (file.webkitRelativePath || file.name).split("/").filter(Boolean);
+    return parts.length <= 2 && file.name.toLowerCase().endsWith(".txt") && !file.name.startsWith(".");
+  });
+  const folder = direct[0]?.webkitRelativePath?.split("/")[0] || "ไฟล์ที่เลือก";
+  const files = direct
+    .map((file) => ({
+      name: file.name,
+      path: file.webkitRelativePath || file.name,
+      size: file.size,
+      file,
+    }))
+    .sort((a, b) => a.name.localeCompare(b.name, "th", { numeric: true }));
+  state.dirHandle = null;
+  applyBrowserFiles(folder, files);
+}
+
+async function writeBatch(dirHandle, folderName, result) {
+  const parent = await dirHandle.getDirectoryHandle(folderName, { create: true });
+  const batch = await parent.getDirectoryHandle(result.batchDir, { create: true });
+  for (const file of result.files) {
+    const handle = await batch.getFileHandle(file.name, { create: true });
+    const stream = await handle.createWritable();
+    await stream.write(file.body);
+    await stream.close();
+  }
+}
+
+function downloadZip(result) {
+  const archive = zipStore(
+    result.files.map((file) => ({ name: `${result.batchDir}/${file.name}`, text: file.body })),
+  );
+  const url = URL.createObjectURL(new Blob([archive], { type: "application/zip" }));
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = `${result.batchDir}.zip`;
+  link.click();
+  setTimeout(() => URL.revokeObjectURL(url), 30000);
+}
+
+async function processInBrowser(settings, dryRun) {
+  const started = Date.now();
+  const inputs = [];
+  for (const key of selectedFiles()) {
+    const item = state.filesByPath.get(key);
+    if (!item) continue;
+    inputs.push({ name: item.name, text: await readTextFile(item.file) });
+  }
+  const result = splitPhoneTexts(inputs, {
+    prefix: settings.prefix,
+    pad: settings.pad,
+    start: settings.start,
+    maxPerFile: settings.maxPerFile,
+    header: settings.header,
+    mobileOnly: settings.mobileOnly,
+    sort: settings.sort,
+    now: new Date(),
+    folderName: safeDirName($("output-name").value),
+  });
+  result.elapsedMs = Date.now() - started;
+  result.browser = true;
+  result.dryRun = dryRun;
+  if (!dryRun && result.files.length) {
+    let wrote = false;
+    if (state.dirHandle) {
+      try {
+        await writeBatch(state.dirHandle, safeDirName($("output-name").value), result);
+        wrote = true;
+      } catch (error) {
+        if (error?.name === "AbortError") throw new Error("ยกเลิกการบันทึกลงโฟลเดอร์");
+      }
+    }
+    if (!wrote) {
+      downloadZip(result);
+      result.downloadedZip = true;
+      result.outputDir = `ดาวน์โหลด ${result.batchDir}.zip`;
+    }
+  }
+  return result;
+}
+
+function setupBrowserMode() {
+  state.browser = true;
+  $("product-note").textContent = "คัดในเบราว์เซอร์ ไม่ส่งเบอร์ออกไปไหน";
+  $("pick-project").textContent = "เลือกโฟลเดอร์จากเครื่อง";
+  $("path-form").classList.add("hidden");
+  $("up-btn").classList.add("hidden");
+  $("crumbs").classList.add("hidden");
+  $("use-folder").classList.add("hidden");
+  $("pick-output").classList.add("hidden");
+  $("reset-output").classList.add("hidden");
+  $("quick-roots").previousElementSibling?.classList.add("hidden");
+  $("quick-roots").classList.add("hidden");
+  $("dir-list").replaceChildren(
+    el("p", "px-1 py-3 text-sm text-stone-400", "เลือกโฟลเดอร์ที่มีไฟล์ .txt เบอร์ถูกคัดในเบราว์เซอร์นี้"),
+  );
+  $("browse-meta").textContent = "ไม่ต้องติดตั้งโปรแกรม";
+  updateOutputLabel();
+}
+
 async function init() {
   $("preview-btn").disabled = true;
   $("save-btn").disabled = true;
@@ -495,11 +688,16 @@ async function init() {
   syncPresets();
   updateOutputLabel();
   try {
-    const [{ roots }, health] = await Promise.all([api("/api/roots"), api("/api/health")]);
+    const health = await api("/api/health");
+    if (health.mode === "browser") {
+      setupBrowserMode();
+      return;
+    }
+    const { roots } = await api("/api/roots");
     renderRoots(roots);
     await loadPath(health.defaultPath);
-  } catch (error) {
-    showError(error.message);
+  } catch {
+    setupBrowserMode();
   }
 }
 
@@ -514,7 +712,11 @@ $("up-btn").addEventListener("click", () => {
 $("use-folder").addEventListener("click", () => {
   if (state.browse) applyProject(state.browse);
 });
-$("pick-project").addEventListener("click", () => pickFromFinder("project"));
+$("pick-project").addEventListener("click", () => {
+  if (state.browser) pickBrowserFolder();
+  else pickFromFinder("project");
+});
+$("folder-input").addEventListener("change", onFolderInput);
 $("pick-output").addEventListener("click", () => pickFromFinder("output"));
 $("reset-output").addEventListener("click", () => {
   state.outputPath = "";

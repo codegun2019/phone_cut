@@ -61,7 +61,7 @@
             <span class="grid h-10 w-10 place-items-center rounded-xl bg-clay text-sm font-semibold text-white">01</span>
             <div>
               <p class="text-base font-semibold tracking-tight text-white">คัดเบอร์</p>
-              <p class="text-xs text-stone-400">แบ่งไฟล์บนเครื่องนี้ ไม่ส่งเบอร์ออกไปไหน</p>
+              <p id="product-note" class="text-xs text-stone-400">แบ่งไฟล์บนเครื่องนี้ ไม่ส่งเบอร์ออกไปไหน</p>
             </div>
           </div>
           <button
@@ -71,6 +71,7 @@
           >
             เลือกโปรเจกต์จาก Finder
           </button>
+          <input id="folder-input" class="hidden" type="file" webkitdirectory directory multiple />
         </div>
 
         <div class="px-5 pt-4">
